@@ -13,6 +13,9 @@
 
 class BlockValidationState;
 
+constexpr int32_t REORGABLE_BLOCK_VERSIONBIT = 0x08000000l;
+constexpr bool DEFAULT_SIGNET_ACCEPT_REORG = true;
+
 /**
  * Extract signature and check whether a block has a valid solution
  */

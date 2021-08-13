@@ -128,6 +128,10 @@ bool CheckSignetBlockSolution(const CBlock& block, const Consensus::Params& cons
         return true;
     }
 
+    if (!consensusParams.signet_accept_reorg && (block.nVersion & REORGABLE_BLOCK_VERSIONBIT) == REORGABLE_BLOCK_VERSIONBIT) {
+        return state.Invalid(BlockValidationResult::BLOCK_RECENT_CONSENSUS_CHANGE, "signet-reorg-block", "signet block will be reorged, ignoring");
+    }
+
     const CScript challenge(consensusParams.signet_challenge.begin(), consensusParams.signet_challenge.end());
     const std::optional<SignetTxs> signet_txs = SignetTxs::Create(block, challenge);
 
