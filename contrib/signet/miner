@@ -345,7 +345,7 @@ def next_block_is_mine(last_hash, my_blocks):
     det_rand = int(last_hash[-16:-8], 16)
     return my_blocks[0] <= (det_rand % my_blocks[2]) < my_blocks[1]
 
-def do_generate(args):
+def validate_args(args):
     if args.max_blocks is not None:
         if args.ongoing:
             logging.error("Cannot specify both --ongoing and --max-blocks")
@@ -378,6 +378,9 @@ def do_generate(args):
             logging.error("Must specify --nbits (use calibrate command to determine value)")
             return 1
 
+    return args, max_blocks
+
+def parse_multiminer(args):
     if args.multiminer is None:
        my_blocks = (0,1,1)
     else:
@@ -396,6 +399,33 @@ def do_generate(args):
             logging.error("Inconsistent values for --multiminer")
             return 1
         my_blocks = (start-1, stop, total)
+
+    return my_blocks
+
+def reconsider_invalid_branches(args):
+    chaintips = json.loads(args.bcli("getchaintips"))
+
+    for branch in chaintips:
+        if branch["status"] == "invalid":
+            hash = str(branch["hash"])
+        args.bcli("reconsiderblock", hash)
+
+def get_current_height(args):
+    chaintips = json.loads(args.bcli("getchaintips"))
+
+    for branch in chaintips:
+        if branch["status"] == "active":
+            return int(branch["height"])
+
+def do_generate(args):
+    try:
+        args, max_blocks = validate_args(args)
+    except:
+        return 1
+
+    my_blocks = parse_multiminer(args)
+    if my_blocks == 1:
+        return 1
 
     ultimate_target = nbits_to_target(int(args.nbits,16))
 
@@ -626,5 +656,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
