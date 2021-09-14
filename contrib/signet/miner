@@ -559,9 +559,50 @@ def do_generate(args):
     if my_blocks == 1:
         return 1
 
-    err = mine_blocks(args, max_blocks, my_blocks)
-    if err == 1:
-        return err
+    if args.reorg:
+        do_reorg(args, my_blocks)
+    else:
+        err = mine_blocks(args, max_blocks, my_blocks)
+        if err == 1:
+            return err
+
+def do_reorg(args, my_blocks):
+    # Reconsider all invalid branches to confirm we are on strongest chain
+    reconsider_invalid_branches(args)
+
+    ultimate_target = nbits_to_target(int(args.nbits,16))
+    mined_blocks = 0
+    min_depth = args.rmin_depth
+    max_depth = args.rmax_depth
+    interval = args.rinterval
+
+    while True:
+        curr_height = get_current_height(args)
+        if curr_height % args.interval == 0:
+            besthash = str(args.bcli("getbestblockhash"))
+            bestheader = json.loads(args.bcli("getblockheader", besthash))
+            depth = min_depth + int(bestheader["nonce"]) % max_depth
+            inval_block_hash = None
+
+            if get_current_height(args) > curr_height:
+                inval_block_hash = str(args.bcli("getblockhash", curr_height + 1))
+                args.bcli("invalidateblock", inval_block_hash)
+
+            while mined_blocks <= depth:
+                if inval_block_hash is None:
+                    if bestheader["version"] != #check version:
+                        inval_block_hash = besthash
+                        args.bcli("invalidateblock", inval_block_hash)
+                lastheader = mine_blocks(args)
+                bestheader = lastheader
+                besthash = bestheader["hash"]
+                mined_blocks += 1
+
+            time.sleep(30)
+            reconsider_invalid_branches(args)
+            continue
+        else:
+            time.sleep(20)
 
 def do_calibrate(args):
     if args.nbits is not None and args.seconds is not None:
