@@ -417,16 +417,7 @@ def get_current_height(args):
         if branch["status"] == "active":
             return int(branch["height"])
 
-def do_generate(args):
-    try:
-        args, max_blocks = validate_args(args)
-    except:
-        return 1
-
-    my_blocks = parse_multiminer(args)
-    if my_blocks == 1:
-        return 1
-
+def mine_blocks(args, max_blocks, my_blocks):
     ultimate_target = nbits_to_target(int(args.nbits,16))
 
     mined_blocks = 0
@@ -546,6 +537,20 @@ def do_generate(args):
         if r != "":
             logging.warning("submitblock returned %s for height %d hash %s", r, tmpl["height"], block.hash)
         lastheader = block.hash
+
+def do_generate(args):
+    try:
+        args, max_blocks = validate_args(args)
+    except:
+        return 1
+
+    my_blocks = parse_multiminer(args)
+    if my_blocks == 1:
+        return 1
+
+    err = mine_blocks(args, max_blocks, my_blocks)
+    if err == 1:
+        return err
 
 def do_calibrate(args):
     if args.nbits is not None and args.seconds is not None:
