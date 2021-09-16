@@ -19,6 +19,7 @@ from io import BytesIO
 
 PATH_BASE_CONTRIB_SIGNET = os.path.abspath(os.path.dirname(os.path.realpath(__file__)))
 PATH_BASE_TEST_FUNCTIONAL = os.path.abspath(os.path.join(PATH_BASE_CONTRIB_SIGNET, "..", "..", "test", "functional"))
+VERSION_BIT = 0x08000000
 sys.path.insert(0, PATH_BASE_TEST_FUNCTIONAL)
 
 from test_framework.blocktools import WITNESS_COMMITMENT_HEADER, script_BIP34_coinbase_height # noqa: E402
@@ -199,7 +200,7 @@ def finish_block(block, signet_solution, grind_cmd):
         block.rehash()
     return block
 
-def generate_psbt(tmpl, reward_spk, *, blocktime=None, version_flag=False):
+def generate_psbt(tmpl, reward_spk, *, blocktime=None, version_bit=0):
     signet_spk = tmpl["signet_challenge"]
     signet_spk_bin = bytes.fromhex(signet_spk)
 
@@ -209,11 +210,8 @@ def generate_psbt(tmpl, reward_spk, *, blocktime=None, version_flag=False):
 
     block = CBlock()
 
-    if version_flag:
-        # Version flag will be used by R (reorg) miner to mark to-be-reorged blocks
-        block.nVersion = tmpl["version"] ^ 0x08000000
-    else:
-        block.nVersion = tmpl["version"]
+    # Version flag will be used by R (reorg) miner to mark to-be-reorged blocks
+    block.nVersion = tmpl["version"] ^ version_bit
 
     block.hashPrevBlock = int(tmpl["previousblockhash"], 16)
     block.nTime = tmpl["curtime"] if blocktime is None else blocktime
@@ -417,7 +415,7 @@ def reconsider_invalid_branches(args):
     for branch in chaintips:
         if branch["status"] == "invalid":
             hash = str(branch["hash"])
-        args.bcli("reconsiderblock", hash)
+            args.bcli("reconsiderblock", hash)
 
 def get_current_height(args):
     chaintips = json.loads(args.bcli("getchaintips"))
@@ -426,31 +424,25 @@ def get_current_height(args):
         if branch["status"] == "active":
             return int(branch["height"])
 
-def mine_blocks(args, max_blocks, my_blocks):
-    ultimate_target = nbits_to_target(int(args.nbits,16))
+def get_current_status(args, bestheader, lastheader, ultimate_target):
+    # current status?
+    bci = json.loads(args.bcli("getblockchaininfo"))
 
-    mined_blocks = 0
-    bestheader = {"hash": None}
-    lastheader = None
-    version_flag = True if args.reorg else False
+    if bestheader["hash"] != bci["bestblockhash"]:
+        bestheader = json.loads(args.bcli("getblockheader", bci["bestblockhash"]))
 
-    while max_blocks is None or mined_blocks < max_blocks:
+    if lastheader is None:
+        lastheader = bestheader["hash"]
+    elif bestheader["hash"] != lastheader:
+        next_delta = next_block_delta(int(bestheader["bits"], 16), bestheader["hash"], ultimate_target, args.poisson)
+        next_delta += bestheader["time"] - time.time()
+        next_is_mine = next_block_is_mine(bestheader["hash"], my_blocks)
+        logging.info("Received new block at height %d; next in %s (%s)", bestheader["height"], seconds_to_hms(next_delta), ("mine" if next_is_mine else "backup"))
+        lastheader = bestheader["hash"]
 
-        # current status?
-        bci = json.loads(args.bcli("getblockchaininfo"))
+    return bci, bestheader, lastheader
 
-        if bestheader["hash"] != bci["bestblockhash"]:
-            bestheader = json.loads(args.bcli("getblockheader", bci["bestblockhash"]))
-
-        if lastheader is None:
-            lastheader = bestheader["hash"]
-        elif bestheader["hash"] != lastheader:
-            next_delta = next_block_delta(int(bestheader["bits"], 16), bestheader["hash"], ultimate_target, args.poisson)
-            next_delta += bestheader["time"] - time.time()
-            next_is_mine = next_block_is_mine(bestheader["hash"], my_blocks)
-            logging.info("Received new block at height %d; next in %s (%s)", bestheader["height"], seconds_to_hms(next_delta), ("mine" if next_is_mine else "backup"))
-            lastheader = bestheader["hash"]
-
+def mine_blocks(args, ultimate_target, bci, my_blocks, bestheader, lastheader, mined_blocks, version_bit=0):
         # when is the next block due to be mined?
         now = time.time()
         if args.set_block_time is not None:
@@ -500,14 +492,14 @@ def mine_blocks(args, max_blocks, my_blocks):
             minestr = "mine" if is_mine else "backup"
             logging.debug("Sleeping for %s, next block due in %s (%s)" % (seconds_to_hms(sleep_for), seconds_to_hms(mine_time - now), minestr))
             time.sleep(sleep_for)
-            continue
+            return 0
 
         # gbt
         tmpl = json.loads(args.bcli("getblocktemplate", '{"rules":["signet","segwit"]}'))
         if tmpl["previousblockhash"] != bci["bestblockhash"]:
             logging.warning("GBT based off unexpected block (%s not %s), retrying", tmpl["previousblockhash"], bci["bestblockhash"])
             time.sleep(1)
-            continue
+            return 0
 
         logging.debug("GBT template: %s", tmpl)
 
@@ -523,8 +515,7 @@ def mine_blocks(args, max_blocks, my_blocks):
 
         # mine block
         logging.debug("Mining block delta=%s start=%s mine=%s", seconds_to_hms(mine_time-bestheader["time"]), mine_time, is_mine)
-        mined_blocks += 1
-        psbt = generate_psbt(tmpl, reward_spk, blocktime=mine_time, version_flag=version_flag)
+        psbt = generate_psbt(tmpl, reward_spk, blocktime=mine_time, version_bit=version_bit)
         psbt_signed = json.loads(args.bcli("-stdin", "walletprocesspsbt", input=psbt.encode('utf8')))
         if not psbt_signed.get("complete",False):
             logging.debug("Generated PSBT: %s" % (psbt,))
@@ -549,6 +540,8 @@ def mine_blocks(args, max_blocks, my_blocks):
             logging.warning("submitblock returned %s for height %d hash %s", r, tmpl["height"], block.hash)
         lastheader = block.hash
 
+        return lastheader
+
 def do_generate(args):
     try:
         args, max_blocks = validate_args(args)
@@ -562,44 +555,78 @@ def do_generate(args):
     if args.reorg:
         do_reorg(args, my_blocks)
     else:
-        err = mine_blocks(args, max_blocks, my_blocks)
-        if err == 1:
-            return err
+        ultimate_target = nbits_to_target(int(args.nbits,16))
+
+        mined_blocks = 0
+        bestheader = {"hash": None}
+        lastheader = None
+        version_flag = True if args.reorg else False
+
+        while max_blocks is None or mined_blocks < max_blocks:
+
+            bci, bestheader, lastheader = get_current_status(args, bestheader, lastheader, ultimate_target)
+            mine_output = mine_blocks(args, ultimate_target, bci, my_blocks, bestheader, lastheader, mined_blocks)
+            mined_blocks += 1
+            if mine_output==0:
+                continue
+            elif mine_output==1:
+                return 1
+            else:
+                lastheader = mine_output
 
 def do_reorg(args, my_blocks):
     # Reconsider all invalid branches to confirm we are on strongest chain
     reconsider_invalid_branches(args)
+    time.sleep(5)
 
     ultimate_target = nbits_to_target(int(args.nbits,16))
-    mined_blocks = 0
     min_depth = args.rmin_depth
     max_depth = args.rmax_depth
     interval = args.rinterval
+    lastheader = None
 
     while True:
         curr_height = get_current_height(args)
-        if curr_height % args.interval == 0:
+        if curr_height % args.rinterval == 0:
+
+            logging.info("Starting at height %s", curr_height)
             besthash = str(args.bcli("getbestblockhash"))
             bestheader = json.loads(args.bcli("getblockheader", besthash))
             depth = min_depth + int(bestheader["nonce"]) % max_depth
+            logging.info("Selected random depth: %s", depth)
+
+            bci = json.loads(args.bcli("getblockchaininfo"))
             inval_block_hash = None
+            initial_block = True
+            mined_blocks = 0
 
             if get_current_height(args) > curr_height:
                 inval_block_hash = str(args.bcli("getblockhash", curr_height + 1))
+                logging.info("Additional block detected at height %s, Invalidating..", curr_height+1)
                 args.bcli("invalidateblock", inval_block_hash)
 
-            while mined_blocks <= depth:
-                if inval_block_hash is None:
-                    if bestheader["version"] != #check version:
-                        inval_block_hash = besthash
+            while mined_blocks < depth:
+                if inval_block_hash is None and initial_block!=True:
+                    if not (bestheader["version"] & VERSION_BIT):
+                        inval_block_hash = bestheader["hash"]
                         args.bcli("invalidateblock", inval_block_hash)
-                lastheader = mine_blocks(args)
-                bestheader = lastheader
-                besthash = bestheader["hash"]
-                mined_blocks += 1
 
+                lastheader = mine_blocks(args, ultimate_target, bci, my_blocks, bestheader, lastheader, mined_blocks, VERSION_BIT)
+                if lastheader==0:
+                    continue
+                elif lastheader==1:
+                    return 1
+                else:
+                    mined_blocks += 1
+                    initial_block = False
+                bestheader = json.loads(args.bcli("getblock", lastheader))
+                bci, bestheader, lastheader = get_current_status(args, bestheader, lastheader, ultimate_target)
+
+            logging.info("Reorg mining completed. Waiting for block propagation..")
             time.sleep(30)
+            logging.info("Reconsidering invalid branches..")
             reconsider_invalid_branches(args)
+            logging.info("Waiting for next interval..")
             continue
         else:
             time.sleep(20)
