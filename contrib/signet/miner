@@ -424,7 +424,7 @@ def get_current_height(args):
         if branch["status"] == "active":
             return int(branch["height"])
 
-def get_current_status(args, bestheader, lastheader, ultimate_target):
+def get_current_status(args, my_blocks, bestheader, lastheader, ultimate_target):
     # current status?
     bci = json.loads(args.bcli("getblockchaininfo"))
 
@@ -564,7 +564,7 @@ def do_generate(args):
 
         while max_blocks is None or mined_blocks < max_blocks:
 
-            bci, bestheader, lastheader = get_current_status(args, bestheader, lastheader, ultimate_target)
+            bci, bestheader, lastheader = get_current_status(args, my_blocks, bestheader, lastheader, ultimate_target)
             mine_output = mine_blocks(args, ultimate_target, bci, my_blocks, bestheader, lastheader, mined_blocks)
             mined_blocks += 1
             if mine_output==0:
@@ -620,7 +620,7 @@ def do_reorg(args, my_blocks):
                     mined_blocks += 1
                     initial_block = False
                 bestheader = json.loads(args.bcli("getblock", lastheader))
-                bci, bestheader, lastheader = get_current_status(args, bestheader, lastheader, ultimate_target)
+                bci, bestheader, lastheader = get_current_status(args, my_blocks, bestheader, lastheader, ultimate_target)
 
             logging.info("Reorg mining completed. Waiting for block propagation..")
             time.sleep(30)
