@@ -606,10 +606,12 @@ def do_reorg(args, my_blocks):
                 args.bcli("invalidateblock", inval_block_hash)
 
             while mined_blocks < depth:
-                if inval_block_hash is None and initial_block!=True:
+                if initial_block!=True:
                     if not (bestheader["version"] & VERSION_BIT):
                         inval_block_hash = bestheader["hash"]
                         args.bcli("invalidateblock", inval_block_hash)
+                        bci, bestheader, lastheader = get_current_status(args, my_blocks, bestheader, lastheader, ultimate_target)
+                        continue
 
                 lastheader = mine_blocks(args, ultimate_target, bci, my_blocks, bestheader, lastheader, mined_blocks, VERSION_BIT)
                 if lastheader==0:
